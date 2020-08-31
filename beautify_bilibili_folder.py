@@ -3,58 +3,201 @@
 
 """
 把从手机app上下载的bilibili视频从文件夹移出并按照视频标题命名
-
-下载下来的目录结构如下:
-1 # 视频分集
-    lua.flv360.bilibili2api.16 # 下载的分辨率不同文件夹稍有差异
-        0.blv # 视频文件
-        0.blv.4m.sum
-        index.json
-    danmaku.xml
-    entry.json # 保存了视频属性信息的json文件
+依赖 ffmpeg 工具来完成视频拼接和音视频合并 https://ffmpeg.zeranoe.com/builds/
+处理后的视频会输出到传入的路径下
 """
+
 import os
+import sys
 import json
+import shutil
+import getopt
+import subprocess
+import multiprocessing
+
+
+class Config(object):
+    def __init__(self):
+        self.entry_file = "entry.json"
+        self.def_video_name = "video.m4s"
+        self.def_audio_name = "audio.m4s"
+        self.blv_postfix = ".blv"
+        self.new_video_postfix = ".mp4"
+
+
+class EntryConfig(Config):
+    ''' bilibili 视频配置文件
+    https://www.cnblogs.com/holittech/p/12210691.html
+    '''
+
+    def __init__(self, cfg_path):
+        # self._get_video_entry_info 用到了 entry_file 所以先继承
+        super().__init__()
+        self.entry_info = self._get_video_entry_info(cfg_path)
+
+    def _get_video_entry_info(self, entry_info_path):
+        '''返回entry.json配置信息
+        '''
+        entry_info_file = os.path.join(entry_info_path, self.entry_file)
+        with open(entry_info_file, "r") as fd:
+            entry_info = json.load(fd)
+        return entry_info
+
+    @property
+    def media_type(self):
+        ''' 视频类型
+        值为2: m4s项目是bilibili存储的一些清晰度较高或较大较长的视频文件
+        值为1: mediablv其实就是bilibili更改的FLV文件，你可以使用ffmpeg转换，也可以直接该拓展名为flv
+        '''
+        return self.entry_info['media_type']
+
+    @property
+    def need_transmission(self):
+        ''' 是否需要做视频转换
+        '''
+        return self.media_type == 2
+
+    @property
+    def type_tag(self):
+        ''' 视频文件所在目录
+        '''
+        return self.entry_info['type_tag']
+
+    @property
+    def video_collection_name(self):
+        '''获取本视频集合名称
+        '''
+        return self.entry_info['title']
+
+    @property
+    def video_title(self):
+        ''' 获取视频标题
+        '''
+        part_title = self.entry_info.get("page_data", {}).get('part')
+        return part_title if part_title else self.video_collection_name
 
 
 class BilibiliVideoHelper(object):
-    def __init__(self):
-        self.curr_path = os.path.abspath('.')
-        # 视频文件夹列表
-        self.dir_list = [x for x in os.listdir('.') if os.path.isdir(x)]
-        # 视频文件
-        self._def_video_name = '0.blv'
-        # 视频文件扩展名
-        self._ext = os.path.splitext(self._def_video_name)[1]
+    '''
+    新版APP下载下来视频格式变了，新版目录结构为：
+    883741576 # 每个合集一个文件夹
+        1 # 每个视频分集放到一个文件夹
+            80
+                音频视频资料分开了，可以使用 ffmpeg 把他们合成一个文件
+                audio.m4s   # 音频资料
+                video.m4s   # 视频资料
+                index.json
+            danmuku.xml
+            entry.json
+    '''
 
-    def mv_video_out(self):
-        """
-        把视频从默认文件夹重命名为实际名称后移动到当前目录
-        """
-        for item in self.dir_list:
-            item_path = os.path.join(self.curr_path, item)
-            video_folder = [x for x in os.listdir(item_path) if x[:3] == 'lua']
-            # 视频所在目录
-            src_folder = os.path.join(item_path, video_folder[0])
-            src_file = os.path.join(src_folder, self._def_video_name)
-            title = self.parse_title(item_path)
-            new_file = title + self._ext
-            if os.path.exists(src_file):
-                os.rename(src_file, new_file)
+    def __init__(self, curr_path):
+        self.config = Config()
+        self.curr_path = curr_path
+        self.pool = multiprocessing.Pool(processes=4)
+
+    def _make_video(self, video_path, new_video_dir, new_video_name):
+        '''把视频资料和音频资料合并成一个文件
+        :param video_path 视频当前所在目录
+        :param new_video_dir 新生成视频所存放目录
+        :param new_video_neme 新生成视频名称
+        '''
+        subprocess.check_output([
+            "ffmpeg",
+            "-i",
+            os.path.join(video_path, self.config.def_video_name),
+            "-i",
+            os.path.join(video_path, self.config.def_audio_name),
+            "-codec",
+            "copy",
+            os.path.join(new_video_dir, new_video_name + self.config.new_video_postfix)
+        ])
+
+    def _merge_blv_video(self, video_path, video_title):
+        ''' 把多个 blv 视频拼接在一起
+        https://blog.csdn.net/winniezhang/article/details/89260841
+        '''
+        blv_videos = "|".join([os.path.join(video_path, x)
+                               for x in os.listdir(video_path) if x.endswith(self.config.blv_postfix)])
+        subprocess.check_output([
+            "ffmpeg",
+            "-i",
+            "concat:" + blv_videos,
+            "-c",
+            "copy",
+            os.path.join(self.curr_path, video_title + self.config.new_video_postfix)
+        ])
+
+    def _get_video_folders(self, root_path):
+        ''' 如果当前目录下所有包含 entry.json 文件的目录，即视频信息所在目录
+        '''
+        video_folders = list()
+        for root, dirs, files in os.walk(root_path):
+            if self.config.entry_file in files:
+                # 如果当前目录下存在 entry.json 文件
+                video_folders.append(root)
+        return video_folders
+
+    def mv_video_out(self, clean):
+        '''把视频移动到本专辑根目录下
+        :param 是否删除旧文件
+        '''
+        for video_item in self._get_video_folders(self.curr_path):
+            # 各集内容所在文件夹
+            video_dir = os.path.join(
+                self.curr_path, video_item
+            )
+
+            entry_cfg = EntryConfig(video_dir)
+            # 视频存放目录
+            video_path = os.path.join(
+                video_dir,
+                entry_cfg.type_tag
+            )
+
+            print("===== video_path: [%s] =====" % video_path)
+            print("===== video_tile: [%s] =====" % entry_cfg.video_title)
+            print("========================\n")
+
+            # 把合成的视频放到专辑目录下
+            if entry_cfg.need_transmission:
+                self._make_video(video_path, self.curr_path, entry_cfg.video_title)
             else:
-                pass
+                self._merge_blv_video(video_path, entry_cfg.video_title)
 
-    def parse_title(self, item_path):
-        """
-        从entry.json文件中获取视频标题
-        """
-        json_path = os.path.join(item_path, 'entry.json')
-        with open(json_path, 'r') as f:
-            load_dict = json.load(f)
-        title = load_dict['page_data']['part']
-        return title
+            # 删除目录
+            # shutil.rmtree(video_dir)
+
+
+def usage(msg):
+    # 输出重定向
+    print("usage:\n\tpython %s /path/to/your/folder\n\tscript will auto find the video and handler it.\n\t-c or --clean= to determinant weather to clean old files." % __file__)
+    print("error:\n\t", msg)
+    sys.exit(1)
+
+
+def do_work(video_path):
+    api = BilibiliVideoHelper()
+    api.mv_video_out(clean)
 
 
 if __name__ == "__main__":
-    api = BilibiliVideoHelper()
-    api.mv_video_out()
+    try:
+        opts, args = getopt.getopt(sys.argv[2:], "c:", ["clean="])
+    except Exception as ex:
+        usage(ex)
+
+    clean = False
+    for opt, arg in opts:
+        if opt in ('-c', '--clean'):
+            clean = arg
+            break
+
+    if not os.path.exists(sys.argv[1]):
+        usage("No input file given")
+
+    if not os.path.exists(sys.argv[1]):
+        usage("path [%s] not found.\n" % sys.argv[1])
+
+    api = BilibiliVideoHelper(sys.argv[1])
+    api.mv_video_out(clean)
