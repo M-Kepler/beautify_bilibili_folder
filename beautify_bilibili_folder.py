@@ -110,22 +110,29 @@ class BilibiliVideoHelper(object):
             os.path.join(video_path, self.config.def_audio_name),
             "-codec",
             "copy",
-            os.path.join(new_video_dir, new_video_name + self.config.new_video_postfix)
+            os.path.join(
+                new_video_dir, new_video_name +
+                self.config.new_video_postfix)
         ])
 
     def _merge_blv_video(self, video_path, video_title):
         ''' 把多个 blv 视频拼接在一起
         https://blog.csdn.net/winniezhang/article/details/89260841
         '''
-        blv_videos = "|".join([os.path.join(video_path, x)
-                               for x in os.listdir(video_path) if x.endswith(self.config.blv_postfix)])
+        blv_videos = "|".join([
+            os.path.join(video_path, x)
+            for x in os.listdir(video_path)
+            if x.endswith(self.config.blv_postfix)
+        ])
         subprocess.check_output([
             "ffmpeg",
             "-i",
             "concat:" + blv_videos,
             "-c",
             "copy",
-            os.path.join(self.curr_path, video_title + self.config.new_video_postfix)
+            os.path.join(
+                self.curr_path,
+                video_title + self.config.new_video_postfix)
         ])
 
     def _get_video_folders(self, root_path):
@@ -161,12 +168,15 @@ class BilibiliVideoHelper(object):
 
             # 把合成的视频放到专辑目录下
             if entry_cfg.need_transmission:
-                self._make_video(video_path, self.curr_path, entry_cfg.video_title)
+                self._make_video(video_path,
+                                 self.curr_path,
+                                 entry_cfg.video_title)
             else:
                 self._merge_blv_video(video_path, entry_cfg.video_title)
 
             # 删除目录
-            # shutil.rmtree(video_dir)
+            if clean:
+                shutil.rmtree(video_dir)
 
 
 def usage(msg):
