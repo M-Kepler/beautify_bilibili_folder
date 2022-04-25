@@ -7,13 +7,13 @@
 处理后的视频会输出到传入的路径下
 """
 
-import os
-import sys
-import json
-import shutil
 import getopt
-import subprocess
+import json
 import multiprocessing
+import os
+import shutil
+import subprocess
+import sys
 
 
 class Config(object):
@@ -26,9 +26,10 @@ class Config(object):
 
 
 class EntryConfig(Config):
-    ''' bilibili 视频配置文件
+    """
+    bilibili 视频配置文件
     https://www.cnblogs.com/holittech/p/12210691.html
-    '''
+    """
 
     def __init__(self, cfg_path):
         # self._get_video_entry_info 用到了 entry_file 所以先继承
@@ -36,8 +37,9 @@ class EntryConfig(Config):
         self.entry_info = self._get_video_entry_info(cfg_path)
 
     def _get_video_entry_info(self, entry_info_path):
-        '''返回entry.json配置信息
-        '''
+        """
+        返回entry.json配置信息
+        """
         entry_info_file = os.path.join(entry_info_path, self.entry_file)
         with open(entry_info_file, "r") as fd:
             entry_info = json.load(fd)
@@ -45,40 +47,45 @@ class EntryConfig(Config):
 
     @property
     def media_type(self):
-        ''' 视频类型
+        """
+        视频类型
         值为2: m4s项目是bilibili存储的一些清晰度较高或较大较长的视频文件
         值为1: mediablv其实就是bilibili更改的FLV文件，你可以使用ffmpeg转换，也可以直接该拓展名为flv
-        '''
+        """
         return self.entry_info['media_type']
 
     @property
     def need_transmission(self):
-        ''' 是否需要做视频转换
-        '''
+        """
+        是否需要做视频转换
+        """
         return self.media_type == 2
 
     @property
     def type_tag(self):
-        ''' 视频文件所在目录
-        '''
+        """
+        视频文件所在目录
+        """
         return self.entry_info['type_tag']
 
     @property
     def video_collection_name(self):
-        '''获取本视频集合名称
-        '''
+        """
+        获取本视频集合名称
+        """
         return self.entry_info['title']
 
     @property
     def video_title(self):
-        ''' 获取视频标题
-        '''
+        """
+        获取视频标题
+        """
         part_title = self.entry_info.get("page_data", {}).get('part')
         return part_title if part_title else self.video_collection_name
 
 
 class BilibiliVideoHelper(object):
-    '''
+    """
     新版APP下载下来视频格式变了，新版目录结构为：
     883741576 # 每个合集一个文件夹
         1 # 每个视频分集放到一个文件夹
@@ -89,7 +96,7 @@ class BilibiliVideoHelper(object):
                 index.json
             danmuku.xml
             entry.json
-    '''
+    """
 
     def __init__(self, curr_path):
         self.config = Config()
@@ -97,11 +104,13 @@ class BilibiliVideoHelper(object):
         self.pool = multiprocessing.Pool(processes=4)
 
     def _make_video(self, video_path, new_video_dir, new_video_name):
-        '''把视频资料和音频资料合并成一个文件
+        """
+        把视频资料和音频资料合并成一个文件
+
         :param video_path 视频当前所在目录
         :param new_video_dir 新生成视频所存放目录
         :param new_video_neme 新生成视频名称
-        '''
+        """
         subprocess.check_output([
             "ffmpeg",
             "-i",
@@ -116,9 +125,10 @@ class BilibiliVideoHelper(object):
         ])
 
     def _merge_blv_video(self, video_path, video_title):
-        ''' 把多个 blv 视频拼接在一起
+        """
+        把多个 blv 视频拼接在一起
         https://blog.csdn.net/winniezhang/article/details/89260841
-        '''
+        """
         blv_videos = "|".join([
             os.path.join(video_path, x)
             for x in os.listdir(video_path)
@@ -136,8 +146,9 @@ class BilibiliVideoHelper(object):
         ])
 
     def _get_video_folders(self, root_path):
-        ''' 如果当前目录下所有包含 entry.json 文件的目录，即视频信息所在目录
-        '''
+        """
+        如果当前目录下所有包含 entry.json 文件的目录，即视频信息所在目录
+        """
         video_folders = list()
         for root, dirs, files in os.walk(root_path):
             if self.config.entry_file in files:
@@ -146,9 +157,11 @@ class BilibiliVideoHelper(object):
         return video_folders
 
     def mv_video_out(self, clean):
-        '''把视频移动到本专辑根目录下
+        """
+        把视频移动到本专辑根目录下
+
         :param 是否删除旧文件
-        '''
+        """
         for video_item in self._get_video_folders(self.curr_path):
             # 各集内容所在文件夹
             video_dir = os.path.join(
@@ -179,35 +192,43 @@ class BilibiliVideoHelper(object):
                 shutil.rmtree(video_dir)
 
 
-def usage(msg):
+def usage(msg=None):
     # 输出重定向
-    print("usage:\n\tpython %s /path/to/your/folder\n\tscript will auto find the video and handler it.\n\t-c or --clean= to determinant weather to clean old files." % __file__)
-    print("error:\n\t", msg)
+    print("""
+usage:
+    python beautify_bilibili_folder.py /path/to/your/folder
+    script will auto find the video and handler it.
+
+    -p or --path=  path to your bilibili download folder
+    -c or --clean= if clean old files.
+""")
+    if msg:
+        print("error:\n\t%s." % msg)
     sys.exit(1)
-
-
-def do_work(video_path):
-    api = BilibiliVideoHelper()
-    api.mv_video_out(clean)
 
 
 if __name__ == "__main__":
     try:
-        opts, args = getopt.getopt(sys.argv[2:], "c:", ["clean="])
+        opts, args = getopt.getopt(sys.argv[1:], "hc:p:", [
+                                   "clean=", "path=", "help"])
     except Exception as ex:
         usage(ex)
 
+    # if not opts:
+        # usage()
+
+    path = "."
     clean = False
     for opt, arg in opts:
+        if opt in ('-h', '--help'):
+            usage()
         if opt in ('-c', '--clean'):
             clean = arg
-            break
-
-    if not os.path.exists(sys.argv[1]):
-        usage("No input file given")
-
-    if not os.path.exists(sys.argv[1]):
-        usage("path [%s] not found.\n" % sys.argv[1])
-
-    api = BilibiliVideoHelper(sys.argv[1])
+            continue
+        if opt in ('-p', '--path'):
+            path = arg
+            continue
+        else:
+            usage()
+    api = BilibiliVideoHelper(path)
     api.mv_video_out(clean)
